@@ -1,10 +1,10 @@
 import streamlit as st
-from litellm import completion
 import os
 from PIL import Image
 import io
 from gtts import gTTS
-import time
+import base64
+from transformers import pipeline
 
 # Page configuration
 st.set_page_config(
@@ -31,31 +31,26 @@ def initialize_api():
     os.environ["HUGGINGFACE_API_KEY"] = hf_token
     return True
 
-def process_image_with_model(image, model_name):
-    """Process image using Hugging Face model via LiteLLM"""
+@st.cache_resource
+def load_model(model_name):
+    """Load model with caching"""
     try:
-        # Convert image to bytes
-        img_byte_arr = io.BytesIO()
-        image.save(img_byte_arr, format='JPEG')
-        img_byte_arr = img_byte_arr.getvalue()
-        
-        # Create prompt for image analysis
-        messages = [
-            {
-                "content": "Please analyze this image and provide a detailed description.",
-                "role": "user"
-            }
-        ]
-        
-        # Make API call with image
-        response = completion(
-            model=f"huggingface/{model_name}",
-            messages=messages,
-            api_base="https://api-inference.huggingface.co/models",
-            image=img_byte_arr
-        )
-        
-        return response.choices[0].message.content
+        if model_name == "deepseek-ai/deepseek-vl-1.3b-base":
+            return pipeline("image-to-text", model=model_name)
+        else:
+            st.error(f"Model {model_name} not supported")
+            return None
+    except Exception as e:
+        st.error(f"Error loading model: {str(e)}")
+        return None
+
+def process_image(image, model):
+    """Process image using loaded model"""
+    try:
+        result = model(image)
+        if isinstance(result, list):
+            return result[0]['generated_text']
+        return result
     except Exception as e:
         st.error(f"Error processing image: {str(e)}")
         return None
@@ -81,14 +76,19 @@ def main():
     
     # Model selection
     models = {
-        "DeepSeek VL": "deepseek-ai/deepseek-vl-1.3b-base",
-        "PaLI-GEMMA": "google/paligemma-3b-pt-224"
+        "DeepSeek VL": "deepseek-ai/deepseek-vl-1.3b-base"
     }
     
     selected_model = st.selectbox(
         "Select Model",
         list(models.keys())
     )
+    
+    # Load model
+    with st.spinner("Loading model..."):
+        model = load_model(models[selected_model])
+        if model is None:
+            st.stop()
     
     # Upload section
     uploaded_file = st.file_uploader("Upload an image", type=['png', 'jpg', 'jpeg'])
@@ -101,7 +101,7 @@ def main():
             
             # Process image
             with st.spinner("Analyzing image..."):
-                response = process_image_with_model(image, models[selected_model])
+                response = process_image(image, model)
                 
                 if response:
                     # Display analysis
