@@ -14,6 +14,9 @@ st.set_page_config(
     layout="wide"
 )
 
+# Set Hugging Face token directly
+os.environ["HUGGINGFACE_API_KEY"] = "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"
+
 # Initialize session state
 if 'messages' not in st.session_state:
     st.session_state.messages = []
@@ -24,19 +27,27 @@ def initialize_models():
     """Initialize models with caching"""
     @st.cache_resource
     def load_image_model():
-        return pipeline("image-to-text", model="deepseek-ai/deepseek-vl-1.3b-base")
+        return pipeline("image-to-text", 
+                      model="deepseek-ai/deepseek-vl-1.3b-base",
+                      token="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")
     
     return load_image_model()
 
-def setup_api():
-    """Setup API keys and configurations"""
+def get_chatbot_response(prompt, context=""):
+    """Get response from chatbot"""
     try:
-        hf_token = st.secrets.get("hf_token", os.getenv("HUGGINGFACE_API_KEY"))
-        os.environ["HUGGINGFACE_API_KEY"] = hf_token
-        return True
+        messages = [{"content": f"{context}\n\nUser: {prompt}", "role": "user"}]
+        response = completion(
+            model="huggingface/microsoft/DialoGPT-medium",
+            messages=messages,
+            api_base="https://api-inference.huggingface.co/models",
+            api_key="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",
+            stream=True
+        )
+        return response
     except Exception as e:
-        st.error(f"Error setting up API: {str(e)}")
-        return False
+        st.error(f"Error getting chatbot response: {str(e)}")
+        return None
 
 def process_image(image, model):
     """Process image and generate description"""
@@ -45,21 +56,6 @@ def process_image(image, model):
         return result[0]['generated_text']
     except Exception as e:
         st.error(f"Error processing image: {str(e)}")
-        return None
-
-def get_chatbot_response(prompt, context=""):
-    """Get response from chatbot"""
-    try:
-        messages = [{"content": f"{context}\n\nUser: {prompt}", "role": "user"}]
-        response = completion(
-            model="huggingface/facebook/blenderbot-400M-distill",
-            messages=messages,
-            api_base="https://api-inference.huggingface.co/models",
-            stream=True
-        )
-        return response
-    except Exception as e:
-        st.error(f"Error getting chatbot response: {str(e)}")
         return None
 
 def text_to_speech(text):
@@ -76,10 +72,6 @@ def text_to_speech(text):
 
 def main():
     st.title("🤖 AI Chatbot with Image Understanding")
-    
-    # Setup API
-    if not setup_api():
-        st.stop()
     
     # Load models
     with st.spinner("Loading models..."):
