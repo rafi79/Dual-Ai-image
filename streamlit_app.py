@@ -4,8 +4,8 @@ import os
 from PIL import Image
 import io
 from gtts import gTTS
-from transformers import pipeline
-import time
+import base64
+import requests
 
 # Page configuration
 st.set_page_config(
@@ -14,8 +14,9 @@ st.set_page_config(
     layout="wide"
 )
 
-# Set Hugging Face token directly
-os.environ["HUGGINGFACE_API_KEY"] = "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"
+# Set Hugging Face token
+HF_TOKEN = "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"
+os.environ["HUGGINGFACE_API_KEY"] = HF_TOKEN
 
 # Initialize session state
 if 'messages' not in st.session_state:
@@ -23,15 +24,23 @@ if 'messages' not in st.session_state:
 if 'current_image' not in st.session_state:
     st.session_state.current_image = None
 
-def initialize_models():
-    """Initialize models with caching"""
-    @st.cache_resource
-    def load_image_model():
-        return pipeline("image-to-text", 
-                      model="deepseek-ai/deepseek-vl-1.3b-base",
-                      token="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")
-    
-    return load_image_model()
+def process_image(image):
+    """Process image using Hugging Face API directly"""
+    try:
+        # Convert image to bytes
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='JPEG')
+        img_byte_arr = img_byte_arr.getvalue()
+
+        # API endpoint for DeepSeek model
+        API_URL = "https://api-inference.huggingface.co/models/deepseek-ai/deepseek-vl-1.3b-base"
+        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+        
+        response = requests.post(API_URL, headers=headers, data=img_byte_arr)
+        return response.json()[0]['generated_text']
+    except Exception as e:
+        st.error(f"Error processing image: {str(e)}")
+        return None
 
 def get_chatbot_response(prompt, context=""):
     """Get response from chatbot"""
@@ -41,21 +50,12 @@ def get_chatbot_response(prompt, context=""):
             model="huggingface/microsoft/DialoGPT-medium",
             messages=messages,
             api_base="https://api-inference.huggingface.co/models",
-            api_key="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",
+            api_key=HF_TOKEN,
             stream=True
         )
         return response
     except Exception as e:
         st.error(f"Error getting chatbot response: {str(e)}")
-        return None
-
-def process_image(image, model):
-    """Process image and generate description"""
-    try:
-        result = model(image)
-        return result[0]['generated_text']
-    except Exception as e:
-        st.error(f"Error processing image: {str(e)}")
         return None
 
 def text_to_speech(text):
@@ -73,10 +73,6 @@ def text_to_speech(text):
 def main():
     st.title("🤖 AI Chatbot with Image Understanding")
     
-    # Load models
-    with st.spinner("Loading models..."):
-        image_model = initialize_models()
-    
     # Sidebar for image upload
     with st.sidebar:
         st.header("Upload Image")
@@ -88,7 +84,7 @@ def main():
             
             # Process image
             with st.spinner("Analyzing image..."):
-                image_description = process_image(image, image_model)
+                image_description = process_image(image)
                 if image_description:
                     st.session_state.messages.append({
                         "role": "assistant",
@@ -118,7 +114,7 @@ def main():
         # Get context from current image if available
         context = ""
         if st.session_state.current_image:
-            image_description = process_image(st.session_state.current_image, image_model)
+            image_description = process_image(st.session_state.current_image)
             if image_description:
                 context = f"The current image shows: {image_description}"
         
