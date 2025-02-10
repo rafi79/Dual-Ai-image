@@ -1,16 +1,15 @@
 import streamlit as st
-import torch
-from transformers import pipeline
+from litellm import completion
+import os
 from PIL import Image
 import io
 from gtts import gTTS
-from huggingface_hub import login
-import os
+import time
 
-# Configuration
+# Page configuration
 st.set_page_config(
-    page_title="AI Image Analyzer",
-    page_icon="🖼️",
+    page_title="AI Image & Text Analyzer",
+    page_icon="🤖",
     layout="wide"
 )
 
@@ -20,33 +19,45 @@ if 'messages' not in st.session_state:
 if 'model_choice' not in st.session_state:
     st.session_state.model_choice = None
 
-def initialize_huggingface():
-    """Initialize Hugging Face authentication"""
+def initialize_api():
+    """Initialize Hugging Face API"""
     try:
-        hf_token = st.secrets["hf_token"]  # Use Streamlit secrets
+        # Try to get API key from Streamlit secrets
+        hf_token = st.secrets["hf_token"]
     except:
-        hf_token = os.getenv("HF_TOKEN", "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")
+        # Fallback to environment variable
+        hf_token = os.getenv("HUGGINGFACE_API_KEY", "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")
     
-    try:
-        login(token=hf_token)
-        return True
-    except Exception as e:
-        st.error(f"Error authenticating with Hugging Face: {str(e)}")
-        return False
+    os.environ["HUGGINGFACE_API_KEY"] = hf_token
+    return True
 
-@st.cache_resource
-def load_model(model_name):
-    """Load model with caching and error handling"""
+def process_image_with_model(image, model_name):
+    """Process image using Hugging Face model via LiteLLM"""
     try:
-        if model_name == "deepseek":
-            return pipeline("image-text-to-text", 
-                          model="deepseek-ai/deepseek-vl-1.3b-base",
-                          device="cpu")  # Force CPU to avoid CUDA memory issues
-        else:
-            st.error(f"Unknown model: {model_name}")
-            return None
+        # Convert image to bytes
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='JPEG')
+        img_byte_arr = img_byte_arr.getvalue()
+        
+        # Create prompt for image analysis
+        messages = [
+            {
+                "content": "Please analyze this image and provide a detailed description.",
+                "role": "user"
+            }
+        ]
+        
+        # Make API call with image
+        response = completion(
+            model=f"huggingface/{model_name}",
+            messages=messages,
+            api_base="https://api-inference.huggingface.co/models",
+            image=img_byte_arr
+        )
+        
+        return response.choices[0].message.content
     except Exception as e:
-        st.error(f"Error loading model {model_name}: {str(e)}")
+        st.error(f"Error processing image: {str(e)}")
         return None
 
 def text_to_speech(text):
@@ -61,65 +72,58 @@ def text_to_speech(text):
         st.warning(f"Text-to-speech conversion failed: {str(e)}")
         return None
 
-def process_image(image, model):
-    """Process image with error handling"""
-    try:
-        result = model(image, "Describe this image in detail")
-        return result[0]['generated_text']
-    except Exception as e:
-        st.error(f"Error processing image: {str(e)}")
-        return None
-
 def main():
-    st.title("🖼️ AI Image Analyzer")
+    st.title("🤖 AI Image & Text Analyzer")
     
-    # Initialize Hugging Face
-    if not initialize_huggingface():
+    # Initialize API
+    if not initialize_api():
         st.stop()
     
     # Model selection
-    model_options = {
-        "DeepSeek VL": "deepseek"
+    models = {
+        "DeepSeek VL": "deepseek-ai/deepseek-vl-1.3b-base",
+        "PaLI-GEMMA": "google/paligemma-3b-pt-224"
     }
     
     selected_model = st.selectbox(
-        "Select AI Model",
-        list(model_options.keys())
+        "Select Model",
+        list(models.keys())
     )
     
-    # Load selected model
-    with st.spinner("Loading model..."):
-        model = load_model(model_options[selected_model])
-        if model is None:
-            st.stop()
-    
-    # File uploader
+    # Upload section
     uploaded_file = st.file_uploader("Upload an image", type=['png', 'jpg', 'jpeg'])
     
     if uploaded_file:
         try:
-            # Display uploaded image
+            # Display image
             image = Image.open(uploaded_file)
             st.image(image, caption="Uploaded Image", use_column_width=True)
             
             # Process image
             with st.spinner("Analyzing image..."):
-                response = process_image(image, model)
+                response = process_image_with_model(image, models[selected_model])
                 
                 if response:
+                    # Display analysis
                     st.subheader("Analysis")
-                    st.write(response)
                     
-                    # Text-to-speech
-                    st.subheader("Audio Description")
-                    audio_file = text_to_speech(response)
-                    if audio_file:
-                        st.audio(audio_file, format='audio/mp3')
+                    # Create columns for text and audio
+                    col1, col2 = st.columns([3, 1])
+                    
+                    with col1:
+                        st.write(response)
+                        
+                    with col2:
+                        # Add audio description
+                        st.subheader("Listen")
+                        audio_file = text_to_speech(response)
+                        if audio_file:
+                            st.audio(audio_file, format='audio/mp3')
                     
                     # Store in chat history
                     st.session_state.messages.append({
                         "role": "user",
-                        "content": "Image uploaded"
+                        "content": f"Uploaded image for analysis using {selected_model}"
                     })
                     st.session_state.messages.append({
                         "role": "assistant",
@@ -127,11 +131,11 @@ def main():
                     })
         
         except Exception as e:
-            st.error(f"Error processing upload: {str(e)}")
+            st.error(f"Error during processing: {str(e)}")
     
-    # Display chat history
+    # Chat history
     if st.session_state.messages:
-        st.subheader("Chat History")
+        st.subheader("Analysis History")
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
                 st.write(message["content"])
